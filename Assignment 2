@@ -1,0 +1,33 @@
+"""python run.py --agent {baseline,reflex,model,utility,llm} --seed N [--replay] [--approve ask|deny]"""
+import argparse, json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harbour.world import run_episode
+from harbour.policies import make_policy
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--agent", required=True, choices=["baseline", "reflex", "model", "utility", "llm"])
+    ap.add_argument("--seed", type=int, required=True)
+    ap.add_argument("--replay", action="store_true", help="reuse saved responses from logs/llm_log.jsonl")
+    ap.add_argument("--approve", default="deny", choices=["ask", "deny"], help="approval gate for R6 actions")
+    ap.add_argument("--zero-shot", action="store_true")
+    ap.add_argument("--no-defences", action="store_true")
+    a = ap.parse_args()
+    if a.agent != "llm":
+        print(json.dumps(run_episode(make_policy(a.agent), a.seed).metrics()))
+        return
+    from harbour.llm_master import run_llm_episode, OpenAIClient, ReplayClient, ApprovalGate
+    client = ReplayClient() if a.replay else OpenAIClient()
+    log = "logs/replay_check.jsonl" if a.replay else "logs/llm_log.jsonl"
+    world, pol = run_llm_episode(a.seed, client, few_shot=not a.zero_shot, defences=not a.no_defences,
+                                 gate=ApprovalGate(a.approve), log_path=log, tag="main")
+    out = world.metrics()
+    s = pol.stats
+    out.update({"invalid_outputs": s["invalid_outputs"], "retries": s["retries"], "fallbacks": s["fallbacks"],
+                "calls": s["calls"], "sec_per_call": round(s["call_time"] / max(s["calls"], 1), 3)})
+    print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    main()
